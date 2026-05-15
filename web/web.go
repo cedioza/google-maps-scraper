@@ -19,16 +19,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// ALLOWED_ORIGIN sets the CORS origin for API requests.
-// If not set, no CORS headers are added (default secure behavior).
-func allowedOrigin() string {
-	if v := os.Getenv("ALLOWED_ORIGIN"); v != "" {
-		return v
-	}
-
-	return ""
-}
-
 //go:embed static
 var static embed.FS
 
@@ -128,7 +118,7 @@ func New(svc *Service, addr string) (*Server, error) {
 		ans.download(w, r)
 	})
 
-	handler := securityHeaders(corsMiddleware(mux))
+	handler := securityHeaders(mux)
 	ans.srv.Handler = handler
 
 	tmplsKeys := []string{
@@ -635,12 +625,6 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
-
-		connectSrc := "'self'"
-		if origin := allowedOrigin(); origin != "" {
-			connectSrc += " " + origin
-		}
-
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; "+
 				"script-src 'self' cdn.redoc.ly cdnjs.cloudflare.com 'unsafe-inline' 'unsafe-eval'; "+
@@ -648,29 +632,7 @@ func securityHeaders(next http.Handler) http.Handler {
 				"style-src 'self' 'unsafe-inline' fonts.googleapis.com; "+
 				"img-src 'self' data: cdn.redoc.ly; "+
 				"font-src 'self' fonts.gstatic.com; "+
-				"connect-src "+connectSrc)
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-// corsMiddleware adds CORS headers for API routes when ALLOWED_ORIGIN is set.
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := allowedOrigin()
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-		}
-
-		// Handle preflight requests
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-
-			return
-		}
+				"connect-src 'self'")
 
 		next.ServeHTTP(w, r)
 	})
