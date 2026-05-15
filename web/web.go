@@ -19,14 +19,30 @@ import (
 	"github.com/google/uuid"
 )
 
-// ALLOWED_ORIGIN sets the CORS origin for API requests.
+// ALLOWED_ORIGIN sets one or more allowed CORS origins (comma-separated).
 // If not set, no CORS headers are added (default secure behavior).
-func allowedOrigin() string {
-	if v := os.Getenv("ALLOWED_ORIGIN"); v != "" {
-		return v
+func allowedOrigins() []string {
+	v := os.Getenv("ALLOWED_ORIGIN")
+	if v == "" {
+		return nil
 	}
 
-	return ""
+	parts := strings.Split(v, ",")
+	dedup := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		dedup = append(dedup, p)
+	}
+
+	return dedup
 }
 
 //go:embed static
@@ -637,7 +653,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 
 		connectSrc := "'self'"
-		if origin := allowedOrigin(); origin != "" {
+		for _, origin := range allowedOrigins() {
 			connectSrc += " " + origin
 		}
 
@@ -657,13 +673,40 @@ func securityHeaders(next http.Handler) http.Handler {
 // corsMiddleware adds CORS headers for API routes when ALLOWED_ORIGIN is set.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := allowedOrigin()
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		origins := allowedOrigins()
+		if len(origins) == 0 {
+			next.ServeHTTP(w, r)
+
+			return
 		}
+
+		reqOrigin := r.Header.Get("Origin")
+		matched := false
+		for _, allowed := range origins {
+			if allowed == reqOrigin {
+				w.Header().Set("Access-Control-Allow-Origin", reqOrigin)
+				matched = true
+
+				break
+			}
+		}
+
+		if !matched {
+			// If no origin matches, don't send CORS headers
+			// and respond with 403 on preflight to prevent access.
+			if r.Method == http.MethodOptions {
+				http.Error(w, "Origin not allowed", http.StatusForbidden)
+
+				return
+			}
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 		// Handle preflight requests
 		if r.Method == http.MethodOptions {
@@ -675,3 +718,4 @@ func corsMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
